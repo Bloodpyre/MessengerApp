@@ -85,18 +85,14 @@ fun ChatScreen(
                         // Определяем, отправитель это или получатель
                         val isSent = msg.sender == currentUsername
 
-                        // Расшифровываем сообщение
-                        val decryptedText = if (isSent) {
-                            // Сообщения, отправленные нами, мы не можем расшифровать чужим ключом
-                            // Нужно расшифровывать своим ключом, но формат тот же
-                            cryptoManager.decryptWithMyKey(msg.encrypted_text)
-                        } else {
-                            cryptoManager.decryptWithMyKey(msg.encrypted_text)
-                        }
+                        // Фильтруем только сообщения из этого чата
+                        // Чат — это диалог между currentUsername и chatPartner
+                        val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
+                                (msg.sender == currentUsername && msg.recipient == chatPartner)
 
-                        // Добавляем только сообщения, относящиеся к этому чату
-                        // (где отправитель или получатель = chatPartner)
-                        if (msg.sender == chatPartner || msg.recipient == chatPartner) {
+                        if (isInThisChat) {
+                            // Расшифровываем сообщение
+                            val decryptedText = cryptoManager.decryptWithMyKey(msg.encrypted_text)
                             decryptedMessages.add(ChatMessage(decryptedText, isSent, System.currentTimeMillis()))
                         }
                     } catch (e: Exception) {
