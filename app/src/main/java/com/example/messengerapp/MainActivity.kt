@@ -74,36 +74,38 @@ fun ChatScreen(
     fun loadMessages() {
         coroutineScope.launch {
             try {
-                // Загружаем все сообщения для текущего пользователя
                 val serverMessages = withContext(Dispatchers.IO) {
                     api.getMessages(currentUsername)
                 }
 
+                // Лог: сколько сообщений пришло
+                println("📥 Получено сообщений с сервера: ${serverMessages.size}")
+
                 val decryptedMessages = mutableListOf<ChatMessage>()
+
                 for (msg in serverMessages) {
-                    try {
-                        // Определяем, отправитель это или получатель
-                        val isSent = msg.sender == currentUsername
+                    println("📨 Сообщение: от=${msg.sender}, кому=${msg.recipient}")
 
-                        // Фильтруем только сообщения из этого чата
-                        // Чат — это диалог между currentUsername и chatPartner
-                        val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
-                                (msg.sender == currentUsername && msg.recipient == chatPartner)
+                    // Временно показываем все сообщения
+                    val isInThisChat = true
+                    val isSent = msg.sender == currentUsername
 
-                        if (isInThisChat) {
-                            // Расшифровываем сообщение
+                    if (isInThisChat) {
+                        try {
                             val decryptedText = cryptoManager.decryptWithMyKey(msg.encrypted_text)
                             decryptedMessages.add(ChatMessage(decryptedText, isSent, System.currentTimeMillis()))
+                            println("   ✅ Расшифровано: $decryptedText")
+                        } catch (e: Exception) {
+                            println("   ❌ Ошибка расшифровки: ${e.message}")
                         }
-                    } catch (e: Exception) {
-                        // Ошибка расшифровки — пропускаем
                     }
                 }
 
-                // Сортируем по времени (пока по порядку добавления)
                 messages = decryptedMessages
+                println("📱 Итого сообщений в чате: ${decryptedMessages.size}")
+
             } catch (e: Exception) {
-                Toast.makeText(context, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
+                println("❌ Ошибка загрузки: ${e.message}")
             }
         }
     }
