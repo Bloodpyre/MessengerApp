@@ -70,7 +70,6 @@ fun ChatScreen(
     val context = LocalContext.current
     val cryptoManager = remember { CryptoManager(context) }
     val api = RetrofitClient.instance
-
     // Загрузка сообщений
     fun loadMessages() {
         coroutineScope.launch {
@@ -122,7 +121,7 @@ fun ChatScreen(
 
                 // Отправляем на сервер
                 val response = withContext(Dispatchers.IO) {
-                    api.sendMessage(com.example.messengerapp.data.models.MessageSend(chatPartner, encrypted))
+                    api.sendMessage(MessageSend(chatPartner, encrypted, currentUsername))
                 }
 
                 // Добавляем сообщение в список
