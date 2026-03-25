@@ -74,6 +74,7 @@ fun ChatScreen(
     fun loadMessages() {
         coroutineScope.launch {
             try {
+                // Загружаем все сообщения для текущего пользователя
                 val serverMessages = withContext(Dispatchers.IO) {
                     api.getMessages(currentUsername)
                 }
@@ -81,20 +82,29 @@ fun ChatScreen(
                 val decryptedMessages = mutableListOf<ChatMessage>()
                 for (msg in serverMessages) {
                     try {
-                        // Сообщения от system — это сообщения от собеседника
+                        // Определяем, отправитель это или получатель
                         val isSent = msg.sender == currentUsername
+
+                        // Расшифровываем сообщение
                         val decryptedText = if (isSent) {
-                            // Это наши сообщения — они не зашифрованы в списке?
-                            // В нашей архитектуре сообщения хранятся зашифрованными всегда
+                            // Сообщения, отправленные нами, мы не можем расшифровать чужим ключом
+                            // Нужно расшифровывать своим ключом, но формат тот же
                             cryptoManager.decryptWithMyKey(msg.encrypted_text)
                         } else {
                             cryptoManager.decryptWithMyKey(msg.encrypted_text)
                         }
-                        decryptedMessages.add(ChatMessage(decryptedText, isSent, System.currentTimeMillis()))
+
+                        // Добавляем только сообщения, относящиеся к этому чату
+                        // (где отправитель или получатель = chatPartner)
+                        if (msg.sender == chatPartner || msg.recipient == chatPartner) {
+                            decryptedMessages.add(ChatMessage(decryptedText, isSent, System.currentTimeMillis()))
+                        }
                     } catch (e: Exception) {
                         // Ошибка расшифровки — пропускаем
                     }
                 }
+
+                // Сортируем по времени (пока по порядку добавления)
                 messages = decryptedMessages
             } catch (e: Exception) {
                 Toast.makeText(context, "Ошибка загрузки: ${e.message}", Toast.LENGTH_SHORT).show()
