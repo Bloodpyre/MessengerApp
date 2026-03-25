@@ -1,0 +1,38 @@
+# Built application files
+*.apk
+*.aab
+/build/
+
+# Android Studio
+.idea/
+.gradle/
+local.properties
+*.iml
+.cxx/
+
+# OSX
+.DS_Store
+
+# Keystore files
+*.jks
+*.keystore
+
+# User-specific configurations
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+.idea/shelf/
+
+# Captured files
+captures/
+
+# IntelliJ
+*.iws
+out/
+
+# Keystore files
+.keystore
+google-services.json
