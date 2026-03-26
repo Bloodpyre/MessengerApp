@@ -78,34 +78,30 @@ fun ChatScreen(
                     api.getMessages(currentUsername)
                 }
 
-                // Лог: сколько сообщений пришло
-                println("📥 Получено сообщений с сервера: ${serverMessages.size}")
+                println("📥 Получено сообщений: ${serverMessages.size}")
 
                 val decryptedMessages = mutableListOf<ChatMessage>()
 
                 for (msg in serverMessages) {
-                    println("📨 Сообщение: от=${msg.sender}, кому=${msg.recipient}")
-
-                    // Временно показываем все сообщения
-                    val isInThisChat = true
+                    // Временно показываем зашифрованный текст
+                    val displayText = "🔒 [${msg.sender} -> ${msg.recipient}]: ${msg.encrypted_text.take(30)}..."
                     val isSent = msg.sender == currentUsername
 
+                    // Проверяем, относится ли к этому чату
+                    val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
+                            (msg.sender == currentUsername && msg.recipient == chatPartner)
+
                     if (isInThisChat) {
-                        try {
-                            val decryptedText = cryptoManager.decryptWithMyKey(msg.encrypted_text)
-                            decryptedMessages.add(ChatMessage(decryptedText, isSent, System.currentTimeMillis()))
-                            println("   ✅ Расшифровано: $decryptedText")
-                        } catch (e: Exception) {
-                            println("   ❌ Ошибка расшифровки: ${e.message}")
-                        }
+                        decryptedMessages.add(ChatMessage(displayText, isSent, System.currentTimeMillis()))
+                        println("   ✅ Добавлено: $displayText")
                     }
                 }
 
                 messages = decryptedMessages
-                println("📱 Итого сообщений в чате: ${decryptedMessages.size}")
+                println("📱 Итого сообщений: ${decryptedMessages.size}")
 
             } catch (e: Exception) {
-                println("❌ Ошибка загрузки: ${e.message}")
+                println("❌ Ошибка: ${e.message}")
             }
         }
     }
