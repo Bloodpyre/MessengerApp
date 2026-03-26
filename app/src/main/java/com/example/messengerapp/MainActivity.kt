@@ -34,6 +34,7 @@ import com.example.messengerapp.data.models.UserRegister
 import com.example.messengerapp.data.network.RetrofitClient
 import com.example.messengerapp.ui.theme.MessengerAppTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,7 +71,8 @@ fun ChatScreen(
     val context = LocalContext.current
     val cryptoManager = remember { CryptoManager(context) }
     val api = RetrofitClient.instance
-    // Загрузка сообщений
+
+    // Загрузка сообщений с сервера
     fun loadMessages() {
         coroutineScope.launch {
             try {
@@ -78,30 +80,35 @@ fun ChatScreen(
                     api.getMessages(currentUsername)
                 }
 
-                println("📥 Получено сообщений: ${serverMessages.size}")
+                println("📥 Получено с сервера: ${serverMessages.size} сообщений")
 
-                val decryptedMessages = mutableListOf<ChatMessage>()
+                val receivedMessages = mutableListOf<ChatMessage>()
 
                 for (msg in serverMessages) {
-                    // Временно показываем зашифрованный текст
-                    val displayText = "🔒 [${msg.sender} -> ${msg.recipient}]: ${msg.encrypted_text.take(30)}..."
-                    val isSent = msg.sender == currentUsername
-
-                    // Проверяем, относится ли к этому чату
+                    // Проверяем, относится ли сообщение к этому чату
                     val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
                             (msg.sender == currentUsername && msg.recipient == chatPartner)
 
-                    if (isInThisChat) {
-                        decryptedMessages.add(ChatMessage(displayText, isSent, System.currentTimeMillis()))
-                        println("   ✅ Добавлено: $displayText")
+                    if (isInThisChat && msg.sender != currentUsername) {
+                        // Это сообщение от собеседника — расшифровываем
+                        try {
+                            val decryptedText = cryptoManager.decryptWithMyKey(msg.encrypted_text)
+                            receivedMessages.add(ChatMessage(decryptedText, false, System.currentTimeMillis()))
+                            println("   ✅ Расшифровано от ${msg.sender}: $decryptedText")
+                        } catch (e: Exception) {
+                            println("   ❌ Ошибка расшифровки: ${e.message}")
+                        }
                     }
                 }
 
-                messages = decryptedMessages
-                println("📱 Итого сообщений: ${decryptedMessages.size}")
+                // Сохраняем ВСЕ сообщения (и отправленные локально, и полученные)
+                // Нужно объединить с существующими отправленными сообщениями
+                val allMessages = (messages + receivedMessages).distinctBy { it.text + it.timestamp }.sortedBy { it.timestamp }
+                messages = allMessages
+                println("📱 Итого сообщений в чате: ${allMessages.size}")
 
             } catch (e: Exception) {
-                println("❌ Ошибка: ${e.message}")
+                println("❌ Ошибка загрузки: ${e.message}")
             }
         }
     }
@@ -110,38 +117,47 @@ fun ChatScreen(
     fun sendMessage() {
         if (inputText.isBlank()) return
 
+        val textToSend = inputText
+        val timestamp = System.currentTimeMillis()
+
+        // Сразу добавляем сообщение в список (отправленное)
+        messages = messages + ChatMessage(textToSend, true, timestamp)
+        inputText = ""
+
         coroutineScope.launch {
             isLoading = true
             try {
-                // Получаем публичный ключ получателя
                 val publicKeyResponse = withContext(Dispatchers.IO) {
                     api.getPublicKey(chatPartner)
                 }
 
-                // Шифруем сообщение
                 val encrypted = withContext(Dispatchers.Default) {
-                    cryptoManager.encryptForRecipient(inputText, publicKeyResponse.public_key)
+                    cryptoManager.encryptForRecipient(textToSend, publicKeyResponse.public_key)
                 }
 
-                // Отправляем на сервер
-                val response = withContext(Dispatchers.IO) {
+                withContext(Dispatchers.IO) {
                     api.sendMessage(MessageSend(chatPartner, encrypted, currentUsername))
                 }
 
-                // Добавляем сообщение в список
-                messages = messages + ChatMessage(inputText, true, System.currentTimeMillis())
-                inputText = ""
+                println("✅ Сообщение отправлено: $textToSend")
 
             } catch (e: Exception) {
+                // Если ошибка — удаляем сообщение из списка
+                messages = messages.filter { it.timestamp != timestamp }
                 Toast.makeText(context, "Ошибка отправки: ${e.message}", Toast.LENGTH_SHORT).show()
+                println("❌ Ошибка отправки: ${e.message}")
             }
             isLoading = false
         }
     }
 
-    // Загружаем сообщения при открытии экрана
+    // Загружаем сообщения при открытии экрана и каждые 5 секунд
     LaunchedEffect(Unit) {
         loadMessages()
+        while (true) {
+            delay(5000)
+            loadMessages()
+        }
     }
 
     Scaffold(
@@ -150,7 +166,7 @@ fun ChatScreen(
                 title = { Text(chatPartner) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
                     }
                 }
             )
@@ -161,7 +177,6 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Список сообщений
             LazyColumn(
                 modifier = Modifier
                     .weight(1f)
@@ -177,7 +192,6 @@ fun ChatScreen(
                 }
             }
 
-            // Поле ввода
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
