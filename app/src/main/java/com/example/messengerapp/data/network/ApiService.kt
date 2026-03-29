@@ -11,6 +11,9 @@ interface ApiService {
     @POST("/register")
     suspend fun register(@Body user: UserRegister): Map<String, String>
 
+    @POST("/login")
+    suspend fun login(@Body user: UserLogin): Map<String, String>
+
     @GET("/users")
     suspend fun getUsers(): List<UserResponse>
 

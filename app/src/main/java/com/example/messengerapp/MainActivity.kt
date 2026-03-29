@@ -24,12 +24,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.messengerapp.data.models.UserLogin
 import com.example.messengerapp.data.crypto.CryptoManager
 import com.example.messengerapp.data.models.MessageSend
 import com.example.messengerapp.data.models.UserRegister
@@ -126,8 +128,9 @@ fun AuthScreen(
     onAuthSuccess: (String) -> Unit
 ) {
     var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    var isLoginMode by remember { mutableStateOf(true) }  // true = вход, false = регистрация
+    var isLoginMode by remember { mutableStateOf(true) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val api = RetrofitClient.instance
@@ -156,33 +159,37 @@ fun AuthScreen(
             modifier = Modifier.fillMaxWidth()
         )
 
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = { password = it },
+            label = { Text("Пароль") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth()
+        )
+
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
             onClick = {
-                if (username.isNotBlank()) {
+                if (username.isNotBlank() && password.isNotBlank()) {
                     isLoading = true
                     coroutineScope.launch {
                         try {
                             if (isLoginMode) {
-                                // ВХОД: проверяем, существует ли пользователь
-                                val users = withContext(Dispatchers.IO) {
-                                    api.getUsers()
-                                }
-                                val userExists = users.any { it.username == username }
-
-                                if (userExists) {
-                                    prefs.edit().putString("current_user", username).apply()
-                                    Toast.makeText(context, "Вход выполнен!", Toast.LENGTH_SHORT).show()
-                                    onAuthSuccess(username)
-                                } else {
-                                    Toast.makeText(context, "Пользователь не найден", Toast.LENGTH_SHORT).show()
-                                    isLoading = false
-                                }
-                            } else {
-                                // РЕГИСТРАЦИЯ: создаем нового пользователя
+                                // ВХОД
                                 val response = withContext(Dispatchers.IO) {
-                                    api.register(UserRegister(username))
+                                    api.login(UserLogin(username, password))
+                                }
+                                prefs.edit().putString("current_user", username).apply()
+                                Toast.makeText(context, "Вход выполнен!", Toast.LENGTH_SHORT).show()
+                                onAuthSuccess(username)
+                            } else {
+                                // РЕГИСТРАЦИЯ
+                                val response = withContext(Dispatchers.IO) {
+                                    api.register(UserRegister(username, password))
                                 }
                                 prefs.edit().putString("current_user", username).apply()
                                 Toast.makeText(context, "Регистрация успешна!", Toast.LENGTH_SHORT).show()
@@ -193,9 +200,11 @@ fun AuthScreen(
                             isLoading = false
                         }
                     }
+                } else {
+                    Toast.makeText(context, "Заполните все поля", Toast.LENGTH_SHORT).show()
                 }
             },
-            enabled = username.isNotBlank() && !isLoading,
+            enabled = !isLoading,
             modifier = Modifier.fillMaxWidth()
         ) {
             if (isLoading) {
