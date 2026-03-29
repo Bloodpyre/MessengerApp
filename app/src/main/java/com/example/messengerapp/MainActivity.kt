@@ -10,18 +10,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -29,257 +30,24 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.messengerapp.data.crypto.CryptoManager
-import com.example.messengerapp.data.models.UserResponse
+import com.example.messengerapp.data.models.MessageSend
 import com.example.messengerapp.data.models.UserRegister
+import com.example.messengerapp.data.models.UserResponse
 import com.example.messengerapp.data.network.RetrofitClient
 import com.example.messengerapp.ui.theme.MessengerAppTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.Surface
-import androidx.compose.material3.TopAppBar
-import com.example.messengerapp.data.models.MessageSend
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Создаем CryptoManager
-        //val cryptoManager = CryptoManager(this)
-
-        // Удаляем старый ключ (только один раз для теста)
-        //cryptoManager.deleteOldKey()
-
         setContent {
             MessengerAppTheme {
                 MessengerApp()
             }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ChatScreen(
-    currentUsername: String,
-    chatPartner: String,
-    onBack: () -> Unit
-) {
-    // Храним все сообщения (и отправленные, и полученные)
-    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
-    // Храним ID отправленных сообщений, чтобы не дублировать
-    var sentMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var inputText by remember { mutableStateOf("") }
-    var isLoading by remember { mutableStateOf(false) }
-    val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
-    val cryptoManager = remember { CryptoManager(context) }
-    val api = RetrofitClient.instance
-    // Проверка ключей после регистрации
-    val publicKey = cryptoManager.getPublicKey()
-    println("🔑 МОЙ ПУБЛИЧНЫЙ КЛЮЧ: $publicKey")
-
-    // Загрузка сообщений с сервера
-    fun loadMessages() {
-        coroutineScope.launch {
-            try {
-                val serverMessages = withContext(Dispatchers.IO) {
-                    api.getMessages(currentUsername)
-                }
-
-                println("📥 Получено с сервера: ${serverMessages.size} сообщений")
-
-                val receivedMessages = mutableListOf<ChatMessage>()
-
-                for (msg in serverMessages) {
-                    // Проверяем, относится ли сообщение к этому чату
-                    val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
-                            (msg.sender == currentUsername && msg.recipient == chatPartner)
-
-                    if (isInThisChat && msg.sender != currentUsername) {
-                        // Это сообщение от собеседника
-                        try {
-                            val decryptedText = cryptoManager.decryptWithMyKey(msg.encrypted_text)
-                            receivedMessages.add(ChatMessage(decryptedText, false, System.currentTimeMillis()))
-                            println("   ✅ Расшифровано от ${msg.sender}: $decryptedText")
-                        } catch (e: Exception) {
-                            println("   ❌ Ошибка расшифровки: ${e.message}")
-                            // Если расшифровка не удалась, но это от собеседника — возможно, это тестовое сообщение
-                            if (msg.encrypted_text.startsWith("test_")) {
-                                receivedMessages.add(ChatMessage(msg.encrypted_text, false, System.currentTimeMillis()))
-                                println("   📦 Добавлено как есть (тестовое): ${msg.encrypted_text}")
-                            }
-                        }
-                    }
-                }
-
-                // НЕ ПЕРЕЗАПИСЫВАЕМ, а объединяем с существующими
-                // Сохраняем отправленные сообщения (isSent = true) и добавляем новые полученные
-                val existingSentMessages = messages.filter { it.isSent }
-                val allMessages = (existingSentMessages + receivedMessages).distinctBy { it.text + it.timestamp }.sortedBy { it.timestamp }
-                messages = allMessages
-
-                println("📱 Итого сообщений в чате: ${allMessages.size} (отправленных: ${existingSentMessages.size}, полученных: ${receivedMessages.size})")
-
-            } catch (e: Exception) {
-                println("❌ Ошибка загрузки: ${e.message}")
-            }
-        }
-    }
-
-    // Отправка сообщения
-    fun sendMessage() {
-        if (inputText.isBlank()) return
-
-        val textToSend = inputText
-        val timestamp = System.currentTimeMillis()
-        val tempId = timestamp.toString()
-
-        // Сразу добавляем сообщение в список
-        messages = messages + ChatMessage(textToSend, true, timestamp)
-        sentMessageIds = sentMessageIds + tempId
-        inputText = ""
-
-        coroutineScope.launch {
-            isLoading = true
-            try {
-                val publicKeyResponse = withContext(Dispatchers.IO) {
-                    api.getPublicKey(chatPartner)
-                }
-
-                // Логируем ключ получателя
-                println("🔑 ПУБЛИЧНЫЙ КЛЮЧ ПОЛУЧАТЕЛЯ ${chatPartner}: ${publicKeyResponse.public_key.take(100)}...")
-                println("🔑 МОЙ ПУБЛИЧНЫЙ КЛЮЧ: ${cryptoManager.getPublicKey().take(100)}...")
-
-                val encrypted = withContext(Dispatchers.Default) {
-                    cryptoManager.encryptForRecipient(textToSend, publicKeyResponse.public_key)
-                }
-
-                println("📦 ЗАШИФРОВАННОЕ СООБЩЕНИЕ: ${encrypted.take(100)}...")
-
-                val response = withContext(Dispatchers.IO) {
-                    api.sendMessage(MessageSend(chatPartner, encrypted, currentUsername))
-                }
-
-                println("✅ Сообщение отправлено: $textToSend")
-
-            } catch (e: Exception) {
-                messages = messages.filter { it.timestamp != timestamp }
-                sentMessageIds = sentMessageIds - tempId
-                Toast.makeText(context, "Ошибка отправки: ${e.message}", Toast.LENGTH_SHORT).show()
-                println("❌ Ошибка отправки: ${e.message}")
-                e.printStackTrace()
-            }
-            isLoading = false
-        }
-    }
-
-    // Загружаем сообщения при открытии экрана и каждые 3 секунды
-    LaunchedEffect(Unit) {
-        loadMessages()
-        while (true) {
-            delay(3000)
-            loadMessages()
-        }
-    }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(chatPartner) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
-                    }
-                }
-            )
-        }
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-        ) {
-            LazyColumn(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                reverseLayout = false,
-                contentPadding = PaddingValues(8.dp)
-            ) {
-                items(messages) { message ->
-                    MessageBubble(
-                        text = message.text,
-                        isSent = message.isSent
-                    )
-                }
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Введите сообщение...") },
-                    enabled = !isLoading
-                )
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                IconButton(
-                    onClick = { sendMessage() },
-                    enabled = inputText.isNotBlank() && !isLoading
-                ) {
-                    Icon(
-                        imageVector = ImageVector.vectorResource(R.drawable.ic_send),
-                        contentDescription = "Отправить"
-                    )
-                }
-            }
-        }
-    }
-}
-
-data class ChatMessage(
-    val text: String,
-    val isSent: Boolean,
-    val timestamp: Long
-)
-
-@Composable
-fun MessageBubble(text: String, isSent: Boolean) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        horizontalArrangement = if (isSent) Arrangement.End else Arrangement.Start
-    ) {
-        Surface(
-            shape = RoundedCornerShape(
-                topStart = 16.dp,
-                topEnd = 16.dp,
-                bottomStart = if (isSent) 16.dp else 4.dp,
-                bottomEnd = if (isSent) 4.dp else 16.dp
-            ),
-            color = if (isSent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            tonalElevation = 1.dp
-        ) {
-            Text(
-                text = text,
-                modifier = Modifier.padding(12.dp),
-                color = if (isSent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-            )
         }
     }
 }
@@ -294,9 +62,8 @@ fun MessengerApp() {
     ) {
         NavHost(
             navController = navController,
-            startDestination = "register"  // ← этот маршрут должен существовать
+            startDestination = "register"
         ) {
-            // Регистрация
             composable("register") {
                 RegisterScreen(
                     onRegisterSuccess = { username ->
@@ -307,7 +74,6 @@ fun MessengerApp() {
                 )
             }
 
-            // Главный экран
             composable(
                 route = "main/{username}",
                 arguments = listOf(navArgument("username") { type = NavType.StringType })
@@ -322,7 +88,6 @@ fun MessengerApp() {
                 )
             }
 
-            // Экран чата
             composable(
                 route = "chat/{currentUsername}/{chatPartner}",
                 arguments = listOf(
@@ -350,7 +115,6 @@ fun RegisterScreen(
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
-    val cryptoManager = remember { CryptoManager(context) }
     val api = RetrofitClient.instance
 
     Column(
@@ -384,14 +148,9 @@ fun RegisterScreen(
                     isLoading = true
                     coroutineScope.launch {
                         try {
-                            // Генерация ключей
-                            val publicKey = withContext(Dispatchers.Default) {
-                                cryptoManager.generateKeyPair()
-                            }
-
-                            // Регистрация на сервере
+                            // Регистрация на сервере (без ключей)
                             val response = withContext(Dispatchers.IO) {
-                                api.register(UserRegister(username, publicKey))
+                                api.register(UserRegister(username))
                             }
 
                             Toast.makeText(context, "Регистрация успешна!", Toast.LENGTH_SHORT).show()
@@ -456,9 +215,7 @@ fun MainScreen(
                 0 -> ChatsScreen(username)
                 1 -> ContactsScreen(
                     username = username,
-                    onContactClick = { contactName ->
-                        navController.navigate("chat/$username/$contactName")
-                    }
+                    navController = navController
                 )
                 2 -> SettingsScreen(username, onLogout)
             }
@@ -482,7 +239,7 @@ fun ChatsScreen(username: String) {
 @Composable
 fun ContactsScreen(
     username: String,
-    onContactClick: (String) -> Unit
+    navController: NavController
 ) {
     var users by remember { mutableStateOf<List<UserResponse>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
@@ -490,14 +247,12 @@ fun ContactsScreen(
     val context = LocalContext.current
     val api = RetrofitClient.instance
 
-    // Загрузка пользователей при запуске экрана
     LaunchedEffect(Unit) {
         coroutineScope.launch {
             try {
                 val userList = withContext(Dispatchers.IO) {
                     api.getUsers()
                 }
-                // Фильтруем текущего пользователя
                 users = userList.filter { it.username != username }
                 isLoading = false
             } catch (e: Exception) {
@@ -535,9 +290,11 @@ fun ContactsScreen(
                 items(users) { user ->
                     ContactItem(
                         username = user.username,
-                        onClick = { onContactClick(user.username) }
+                        onClick = {
+                            navController.navigate("chat/$username/${user.username}")
+                        }
                     )
-                    HorizontalDivider()
+                    Divider()
                 }
             }
         }
@@ -553,7 +310,6 @@ fun ContactItem(username: String, onClick: () -> Unit) {
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Аватар (инициал)
         Box(
             modifier = Modifier
                 .size(48.dp)
@@ -602,3 +358,211 @@ fun SettingsScreen(username: String, onLogout: () -> Unit) {
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ChatScreen(
+    currentUsername: String,
+    chatPartner: String,
+    onBack: () -> Unit
+) {
+    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    var inputText by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val cryptoManager = remember { CryptoManager(context) }
+    val api = RetrofitClient.instance
+
+    // Загрузка сообщений с сервера
+    fun loadMessages() {
+        coroutineScope.launch {
+            try {
+                val serverMessages = withContext(Dispatchers.IO) {
+                    api.getMessages(currentUsername)
+                }
+
+                println("📥 Получено с сервера: ${serverMessages.size} сообщений")
+
+                val loadedMessages = mutableListOf<ChatMessage>()
+
+                for (msg in serverMessages) {
+                    // Проверяем, относится ли сообщение к этому чату
+                    val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
+                            (msg.sender == currentUsername && msg.recipient == chatPartner)
+
+                    if (isInThisChat) {
+                        val isSent = msg.sender == currentUsername
+
+                        // Расшифровываем сообщение
+                        val decryptedText = try {
+                            cryptoManager.decrypt(msg.encrypted_text)
+                        } catch (e: Exception) {
+                            println("❌ Ошибка расшифровки: ${e.message}")
+                            "[Зашифровано]"
+                        }
+
+                        loadedMessages.add(ChatMessage(decryptedText, isSent, msg.timestamp.toLongOrNull() ?: System.currentTimeMillis()))
+                        println("   ✅ Добавлено: от ${if (isSent) "меня" else chatPartner}: $decryptedText")
+                    }
+                }
+
+                // Сортируем по времени
+                messages = loadedMessages.sortedBy { it.timestamp }
+                println("📱 Итого сообщений в чате: ${messages.size}")
+
+            } catch (e: Exception) {
+                println("❌ Ошибка загрузки: ${e.message}")
+            }
+        }
+    }
+
+    // Отправка сообщения
+    fun sendMessage() {
+        if (inputText.isBlank()) return
+
+        val textToSend = inputText
+        val timestamp = System.currentTimeMillis()
+
+        // Шифруем сообщение
+        val encryptedText = try {
+            cryptoManager.encrypt(textToSend)
+        } catch (e: Exception) {
+            Toast.makeText(context, "Ошибка шифрования: ${e.message}", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        // Временно добавляем сообщение в список
+        messages = messages + ChatMessage(textToSend, true, timestamp)
+        inputText = ""
+
+        coroutineScope.launch {
+            isLoading = true
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    api.sendMessage(MessageSend(chatPartner, encryptedText, currentUsername))
+                }
+
+                println("✅ Сообщение отправлено: $textToSend")
+
+                // Обновляем список с сервера
+                loadMessages()
+
+            } catch (e: Exception) {
+                // Если ошибка — удаляем сообщение из списка
+                messages = messages.filter { it.timestamp != timestamp }
+                Toast.makeText(context, "Ошибка отправки: ${e.message}", Toast.LENGTH_SHORT).show()
+                println("❌ Ошибка отправки: ${e.message}")
+            }
+            isLoading = false
+        }
+    }
+
+    // Загружаем сообщения при открытии экрана и каждые 3 секунды
+    LaunchedEffect(Unit) {
+        loadMessages()
+        while (true) {
+            delay(3000)
+            loadMessages()
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(chatPartner) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { loadMessages() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Обновить")
+                    }
+                }
+            )
+        }
+    ) { paddingValues ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                reverseLayout = false,
+                contentPadding = PaddingValues(8.dp)
+            ) {
+                items(messages) { message ->
+                    MessageBubble(
+                        text = message.text,
+                        isSent = message.isSent
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = inputText,
+                    onValueChange = { inputText = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Введите сообщение...") },
+                    enabled = !isLoading
+                )
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                IconButton(
+                    onClick = { sendMessage() },
+                    enabled = inputText.isNotBlank() && !isLoading
+                ) {
+                    Icon(
+                        imageVector = ImageVector.vectorResource(R.drawable.ic_send),
+                        contentDescription = "Отправить"
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MessageBubble(text: String, isSent: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        horizontalArrangement = if (isSent) Arrangement.End else Arrangement.Start
+    ) {
+        Surface(
+            shape = RoundedCornerShape(
+                topStart = 16.dp,
+                topEnd = 16.dp,
+                bottomStart = if (isSent) 16.dp else 4.dp,
+                bottomEnd = if (isSent) 4.dp else 16.dp
+            ),
+            color = if (isSent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+            tonalElevation = 1.dp
+        ) {
+            Text(
+                text = text,
+                modifier = Modifier.padding(12.dp),
+                color = if (isSent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+data class ChatMessage(
+    val text: String,
+    val isSent: Boolean,
+    val timestamp: Long
+)
