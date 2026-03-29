@@ -1,6 +1,7 @@
 package com.example.messengerapp
 
 import android.os.Bundle
+import android.content.Context
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -55,6 +56,12 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MessengerApp() {
     val navController = rememberNavController()
+    val context = LocalContext.current
+    val prefs = context.getSharedPreferences("messenger_prefs", Context.MODE_PRIVATE)
+    val savedUsername = prefs.getString("current_user", null)
+
+    // Если пользователь уже входил, идем сразу в main, иначе на экран авторизации
+    val startDestination = if (!savedUsername.isNullOrEmpty()) "main/$savedUsername" else "auth"
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -62,18 +69,20 @@ fun MessengerApp() {
     ) {
         NavHost(
             navController = navController,
-            startDestination = "register"
+            startDestination = startDestination
         ) {
-            composable("register") {
-                RegisterScreen(
-                    onRegisterSuccess = { username ->
+            // Экран авторизации
+            composable("auth") {
+                AuthScreen(
+                    onAuthSuccess = { username ->
                         navController.navigate("main/$username") {
-                            popUpTo("register") { inclusive = true }
+                            popUpTo("auth") { inclusive = true }
                         }
                     }
                 )
             }
 
+            // Главный экран
             composable(
                 route = "main/{username}",
                 arguments = listOf(navArgument("username") { type = NavType.StringType })
@@ -83,11 +92,16 @@ fun MessengerApp() {
                     username = username,
                     navController = navController,
                     onLogout = {
-                        navController.popBackStack("register", inclusive = false)
+                        println("🔓 Выход из аккаунта: $username")
+                        // Очищаем сохраненного пользователя
+                        prefs.edit().remove("current_user").apply()
+                        navController.navigate("auth") {
+                            popUpTo(0) { inclusive = true }
+                        }
                     }
                 )
             }
-
+            // Экран чата
             composable(
                 route = "chat/{currentUsername}/{chatPartner}",
                 arguments = listOf(
@@ -108,14 +122,16 @@ fun MessengerApp() {
 }
 
 @Composable
-fun RegisterScreen(
-    onRegisterSuccess: (String) -> Unit
+fun AuthScreen(
+    onAuthSuccess: (String) -> Unit
 ) {
     var username by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    var isLoginMode by remember { mutableStateOf(true) }  // true = вход, false = регистрация
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val api = RetrofitClient.instance
+    val prefs = context.getSharedPreferences("messenger_prefs", Context.MODE_PRIVATE)
 
     Column(
         modifier = Modifier
@@ -135,7 +151,7 @@ fun RegisterScreen(
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Введите имя пользователя") },
+            label = { Text("Имя пользователя") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -148,13 +164,30 @@ fun RegisterScreen(
                     isLoading = true
                     coroutineScope.launch {
                         try {
-                            // Регистрация на сервере (без ключей)
-                            val response = withContext(Dispatchers.IO) {
-                                api.register(UserRegister(username))
-                            }
+                            if (isLoginMode) {
+                                // ВХОД: проверяем, существует ли пользователь
+                                val users = withContext(Dispatchers.IO) {
+                                    api.getUsers()
+                                }
+                                val userExists = users.any { it.username == username }
 
-                            Toast.makeText(context, "Регистрация успешна!", Toast.LENGTH_SHORT).show()
-                            onRegisterSuccess(username)
+                                if (userExists) {
+                                    prefs.edit().putString("current_user", username).apply()
+                                    Toast.makeText(context, "Вход выполнен!", Toast.LENGTH_SHORT).show()
+                                    onAuthSuccess(username)
+                                } else {
+                                    Toast.makeText(context, "Пользователь не найден", Toast.LENGTH_SHORT).show()
+                                    isLoading = false
+                                }
+                            } else {
+                                // РЕГИСТРАЦИЯ: создаем нового пользователя
+                                val response = withContext(Dispatchers.IO) {
+                                    api.register(UserRegister(username))
+                                }
+                                prefs.edit().putString("current_user", username).apply()
+                                Toast.makeText(context, "Регистрация успешна!", Toast.LENGTH_SHORT).show()
+                                onAuthSuccess(username)
+                            }
                         } catch (e: Exception) {
                             Toast.makeText(context, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
                             isLoading = false
@@ -169,7 +202,20 @@ fun RegisterScreen(
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
             }
-            Text("Зарегистрироваться")
+            Text(if (isLoginMode) "Войти" else "Зарегистрироваться")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TextButton(
+            onClick = { isLoginMode = !isLoginMode }
+        ) {
+            Text(
+                if (isLoginMode)
+                    "Нет аккаунта? Зарегистрироваться"
+                else
+                    "Уже есть аккаунт? Войти"
+            )
         }
     }
 }
@@ -217,7 +263,7 @@ fun MainScreen(
                     username = username,
                     navController = navController
                 )
-                2 -> SettingsScreen(username, onLogout)
+                2 -> SettingsScreen(username, onLogout)  // ← передаем onLogout
             }
         }
     }
@@ -343,18 +389,47 @@ fun ContactItem(username: String, onClick: () -> Unit) {
 @Composable
 fun SettingsScreen(username: String, onLogout: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text("Настройки", style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("Пользователь: $username", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = "Настройки",
+            style = MaterialTheme.typography.headlineSmall
+        )
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(onClick = onLogout) {
-            Text("Выйти")
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text("Пользователь:", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    username,
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = {
+                println("🔘 Кнопка выхода нажата")
+                onLogout()
+            },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.error
+            )
+        ) {
+            Text("Выйти из аккаунта")
         }
     }
 }
@@ -387,32 +462,38 @@ fun ChatScreen(
                 val loadedMessages = mutableListOf<ChatMessage>()
 
                 for (msg in serverMessages) {
-                    // Проверяем, относится ли сообщение к этому чату
                     val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
                             (msg.sender == currentUsername && msg.recipient == chatPartner)
 
                     if (isInThisChat) {
                         val isSent = msg.sender == currentUsername
 
-                        // Расшифровываем сообщение
+                        // Безопасная расшифровка
                         val decryptedText = try {
                             cryptoManager.decrypt(msg.encrypted_text)
                         } catch (e: Exception) {
                             println("❌ Ошибка расшифровки: ${e.message}")
-                            "[Зашифровано]"
+                            if (msg.encrypted_text.length > 30) {
+                                "[Зашифрованное сообщение]"
+                            } else {
+                                msg.encrypted_text  // тестовое сообщение
+                            }
                         }
 
-                        loadedMessages.add(ChatMessage(decryptedText, isSent, msg.timestamp.toLongOrNull() ?: System.currentTimeMillis()))
-                        println("   ✅ Добавлено: от ${if (isSent) "меня" else chatPartner}: $decryptedText")
+                        loadedMessages.add(ChatMessage(
+                            text = decryptedText,
+                            isSent = isSent,
+                            timestamp = msg.timestamp.toLongOrNull() ?: System.currentTimeMillis()
+                        ))
                     }
                 }
 
-                // Сортируем по времени
                 messages = loadedMessages.sortedBy { it.timestamp }
                 println("📱 Итого сообщений в чате: ${messages.size}")
 
             } catch (e: Exception) {
                 println("❌ Ошибка загрузки: ${e.message}")
+                e.printStackTrace()
             }
         }
     }
