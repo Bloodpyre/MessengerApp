@@ -67,17 +67,39 @@ class CryptoManager(private val context: Context) {
 
     // Расшифровка своим ключом
     fun decryptWithMyKey(encryptedPackage: String): String {
+        println("🔓 НАЧАЛО РАСШИФРОВКИ")
+        println("🔓 Пакет: ${encryptedPackage.take(100)}...")
+
         val parts = encryptedPackage.split(":")
-        if (parts.size != 3) throw IllegalArgumentException("Invalid encrypted package")
+        println("🔓 Количество частей: ${parts.size}")
 
-        val encryptedAesKey = Base64.decode(parts[0], Base64.NO_WRAP)
-        val iv = Base64.decode(parts[1], Base64.NO_WRAP)
-        val ciphertext = Base64.decode(parts[2], Base64.NO_WRAP)
+        if (parts.size != 3) {
+            println("⚠️ Неверный формат, возвращаем как есть")
+            return encryptedPackage
+        }
 
-        val aesKeyBytes = decryptWithRsa(encryptedAesKey)
-        val aesKey = SecretKeySpec(aesKeyBytes, "AES")
+        try {
+            val encryptedAesKey = Base64.decode(parts[0], Base64.NO_WRAP)
+            val iv = Base64.decode(parts[1], Base64.NO_WRAP)
+            val ciphertext = Base64.decode(parts[2], Base64.NO_WRAP)
 
-        return decryptWithAes(ciphertext, iv, aesKey)
+            println("🔓 Размер зашифрованного AES-ключа: ${encryptedAesKey.size}")
+            println("🔓 Размер IV: ${iv.size}")
+            println("🔓 Размер шифротекста: ${ciphertext.size}")
+
+            val aesKeyBytes = decryptWithRsa(encryptedAesKey)
+            println("🔓 AES-ключ расшифрован, размер: ${aesKeyBytes.size}")
+
+            val aesKey = SecretKeySpec(aesKeyBytes, "AES")
+            val decrypted = decryptWithAes(ciphertext, iv, aesKey)
+            println("🔓 СООБЩЕНИЕ РАСШИФРОВАНО: $decrypted")
+
+            return decrypted
+        } catch (e: Exception) {
+            println("❌ Ошибка расшифровки: ${e.message}")
+            e.printStackTrace()
+            throw e
+        }
     }
 
     // ========== Вспомогательные методы ==========
@@ -122,5 +144,16 @@ class CryptoManager(private val context: Context) {
         val keySpec = X509EncodedKeySpec(keyBytes)
         val keyFactory = KeyFactory.getInstance("RSA")
         return keyFactory.generatePublic(keySpec)
+    }
+
+    fun deleteOldKey() {
+        try {
+            if (keyStore.containsAlias(KEY_ALIAS)) {
+                keyStore.deleteEntry(KEY_ALIAS)
+                println("🗑️ Старый ключ удален")
+            }
+        } catch (e: Exception) {
+            println("❌ Ошибка удаления ключа: ${e.message}")
+        }
     }
 }

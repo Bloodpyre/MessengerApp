@@ -49,6 +49,13 @@ import com.example.messengerapp.data.models.MessageSend
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Создаем CryptoManager
+        //val cryptoManager = CryptoManager(this)
+
+        // Удаляем старый ключ (только один раз для теста)
+        //cryptoManager.deleteOldKey()
+
         setContent {
             MessengerAppTheme {
                 MessengerApp()
@@ -64,13 +71,19 @@ fun ChatScreen(
     chatPartner: String,
     onBack: () -> Unit
 ) {
+    // Храним все сообщения (и отправленные, и полученные)
     var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    // Храним ID отправленных сообщений, чтобы не дублировать
+    var sentMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val cryptoManager = remember { CryptoManager(context) }
     val api = RetrofitClient.instance
+    // Проверка ключей после регистрации
+    val publicKey = cryptoManager.getPublicKey()
+    println("🔑 МОЙ ПУБЛИЧНЫЙ КЛЮЧ: $publicKey")
 
     // Загрузка сообщений с сервера
     fun loadMessages() {
@@ -90,22 +103,29 @@ fun ChatScreen(
                             (msg.sender == currentUsername && msg.recipient == chatPartner)
 
                     if (isInThisChat && msg.sender != currentUsername) {
-                        // Это сообщение от собеседника — расшифровываем
+                        // Это сообщение от собеседника
                         try {
                             val decryptedText = cryptoManager.decryptWithMyKey(msg.encrypted_text)
                             receivedMessages.add(ChatMessage(decryptedText, false, System.currentTimeMillis()))
                             println("   ✅ Расшифровано от ${msg.sender}: $decryptedText")
                         } catch (e: Exception) {
                             println("   ❌ Ошибка расшифровки: ${e.message}")
+                            // Если расшифровка не удалась, но это от собеседника — возможно, это тестовое сообщение
+                            if (msg.encrypted_text.startsWith("test_")) {
+                                receivedMessages.add(ChatMessage(msg.encrypted_text, false, System.currentTimeMillis()))
+                                println("   📦 Добавлено как есть (тестовое): ${msg.encrypted_text}")
+                            }
                         }
                     }
                 }
 
-                // Сохраняем ВСЕ сообщения (и отправленные локально, и полученные)
-                // Нужно объединить с существующими отправленными сообщениями
-                val allMessages = (messages + receivedMessages).distinctBy { it.text + it.timestamp }.sortedBy { it.timestamp }
+                // НЕ ПЕРЕЗАПИСЫВАЕМ, а объединяем с существующими
+                // Сохраняем отправленные сообщения (isSent = true) и добавляем новые полученные
+                val existingSentMessages = messages.filter { it.isSent }
+                val allMessages = (existingSentMessages + receivedMessages).distinctBy { it.text + it.timestamp }.sortedBy { it.timestamp }
                 messages = allMessages
-                println("📱 Итого сообщений в чате: ${allMessages.size}")
+
+                println("📱 Итого сообщений в чате: ${allMessages.size} (отправленных: ${existingSentMessages.size}, полученных: ${receivedMessages.size})")
 
             } catch (e: Exception) {
                 println("❌ Ошибка загрузки: ${e.message}")
@@ -119,9 +139,11 @@ fun ChatScreen(
 
         val textToSend = inputText
         val timestamp = System.currentTimeMillis()
+        val tempId = timestamp.toString()
 
-        // Сразу добавляем сообщение в список (отправленное)
+        // Сразу добавляем сообщение в список
         messages = messages + ChatMessage(textToSend, true, timestamp)
+        sentMessageIds = sentMessageIds + tempId
         inputText = ""
 
         coroutineScope.launch {
@@ -131,31 +153,38 @@ fun ChatScreen(
                     api.getPublicKey(chatPartner)
                 }
 
+                // Логируем ключ получателя
+                println("🔑 ПУБЛИЧНЫЙ КЛЮЧ ПОЛУЧАТЕЛЯ ${chatPartner}: ${publicKeyResponse.public_key.take(100)}...")
+                println("🔑 МОЙ ПУБЛИЧНЫЙ КЛЮЧ: ${cryptoManager.getPublicKey().take(100)}...")
+
                 val encrypted = withContext(Dispatchers.Default) {
                     cryptoManager.encryptForRecipient(textToSend, publicKeyResponse.public_key)
                 }
 
-                withContext(Dispatchers.IO) {
+                println("📦 ЗАШИФРОВАННОЕ СООБЩЕНИЕ: ${encrypted.take(100)}...")
+
+                val response = withContext(Dispatchers.IO) {
                     api.sendMessage(MessageSend(chatPartner, encrypted, currentUsername))
                 }
 
                 println("✅ Сообщение отправлено: $textToSend")
 
             } catch (e: Exception) {
-                // Если ошибка — удаляем сообщение из списка
                 messages = messages.filter { it.timestamp != timestamp }
+                sentMessageIds = sentMessageIds - tempId
                 Toast.makeText(context, "Ошибка отправки: ${e.message}", Toast.LENGTH_SHORT).show()
                 println("❌ Ошибка отправки: ${e.message}")
+                e.printStackTrace()
             }
             isLoading = false
         }
     }
 
-    // Загружаем сообщения при открытии экрана и каждые 5 секунд
+    // Загружаем сообщения при открытии экрана и каждые 3 секунды
     LaunchedEffect(Unit) {
         loadMessages()
         while (true) {
-            delay(5000)
+            delay(3000)
             loadMessages()
         }
     }
