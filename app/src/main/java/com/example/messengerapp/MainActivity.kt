@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -17,6 +18,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -25,12 +29,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.runtime.collectAsState
 import androidx.navigation.NavController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.messengerapp.data.database.ReadMessageEntity
+import com.example.messengerapp.data.database.AppDatabase
+import com.example.messengerapp.data.database.ChatEntity
 import com.example.messengerapp.data.models.UserLogin
 import com.example.messengerapp.data.crypto.CryptoManager
 import com.example.messengerapp.data.models.MessageSend
@@ -42,6 +50,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -267,27 +276,71 @@ fun MainScreen(
                 .padding(paddingValues)
         ) {
             when (selectedTab) {
-                0 -> ChatsScreen(username)
+                0 -> ChatsScreen(
+                    username = username,
+                    onChatClick = { partnerName ->
+                        navController.navigate("chat/$username/$partnerName")
+                    }
+                )
                 1 -> ContactsScreen(
                     username = username,
                     navController = navController
                 )
-                2 -> SettingsScreen(username, onLogout)  // ← передаем onLogout
+                2 -> SettingsScreen(username, onLogout)
             }
         }
     }
 }
 
 @Composable
-fun ChatsScreen(username: String) {
+fun ChatsScreen(
+    username: String,
+    onChatClick: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val db = remember { AppDatabase.getInstance(context) }
+    val chatsFlow = remember { db.chatDao().getAllFlow() }
+    val chats by chatsFlow.collectAsState(initial = emptyList())
+    val coroutineScope = rememberCoroutineScope()
+
     Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        modifier = Modifier.fillMaxSize()
     ) {
-        Text("Чаты", style = MaterialTheme.typography.headlineSmall)
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("Пользователь: $username", style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = "Чаты",
+            style = MaterialTheme.typography.headlineSmall,
+            modifier = Modifier.padding(16.dp)
+        )
+
+        if (chats.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Нет чатов. Начните диалог из списка контактов",
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier.padding(32.dp)
+                )
+            }
+        } else {
+            LazyColumn {
+                items(chats) { chat ->
+                    ChatItem(
+                        partnerName = chat.partnerName,
+                        lastMessage = chat.lastMessage,
+                        unreadCount = chat.unreadCount,
+                        onClick = {
+                            coroutineScope.launch {
+                                db.chatDao().upsert(chat.copy(unreadCount = 0))
+                            }
+                            onChatClick(chat.partnerName)
+                        }
+                    )
+                    Divider()
+                }
+            }
+        }
     }
 }
 
@@ -451,12 +504,15 @@ fun ChatScreen(
     onBack: () -> Unit
 ) {
     var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
+    var processedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }  // ← храним ID обработанных сообщений
     var inputText by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
     val cryptoManager = remember { CryptoManager(context) }
     val api = RetrofitClient.instance
+    val db = remember { AppDatabase.getInstance(context) }
+    val listState = rememberLazyListState()
 
     // Загрузка сообщений с сервера
     fun loadMessages() {
@@ -469,6 +525,9 @@ fun ChatScreen(
                 println("📥 Получено с сервера: ${serverMessages.size} сообщений")
 
                 val loadedMessages = mutableListOf<ChatMessage>()
+                var lastMessageForChat: String? = null
+                var lastMessageTime: Long = 0
+                var newUnreadCount = 0
 
                 for (msg in serverMessages) {
                     val isInThisChat = (msg.sender == chatPartner && msg.recipient == currentUsername) ||
@@ -476,8 +535,8 @@ fun ChatScreen(
 
                     if (isInThisChat) {
                         val isSent = msg.sender == currentUsername
+                        val timestamp = msg.timestamp.toLongOrNull() ?: System.currentTimeMillis()
 
-                        // Безопасная расшифровка
                         val decryptedText = try {
                             cryptoManager.decrypt(msg.encrypted_text)
                         } catch (e: Exception) {
@@ -485,19 +544,49 @@ fun ChatScreen(
                             if (msg.encrypted_text.length > 30) {
                                 "[Зашифрованное сообщение]"
                             } else {
-                                msg.encrypted_text  // тестовое сообщение
+                                msg.encrypted_text
                             }
                         }
 
                         loadedMessages.add(ChatMessage(
+                            messageId = msg.message_id,
                             text = decryptedText,
                             isSent = isSent,
-                            timestamp = msg.timestamp.toLongOrNull() ?: System.currentTimeMillis()
+                            timestamp = timestamp
                         ))
+
+                        if (timestamp > lastMessageTime) {
+                            lastMessageTime = timestamp
+                            lastMessageForChat = decryptedText
+                        }
+
+                        // Проверяем, прочитано ли сообщение
+                        val isRead = withContext(Dispatchers.IO) {
+                            db.readMessageDao().isMessageRead(msg.message_id)
+                        }
+
+                        if (!isSent && !isRead) {
+                            newUnreadCount++
+                            println("   📬 Новое непрочитанное: $decryptedText (ID: ${msg.message_id})")
+                        }
                     }
                 }
 
                 messages = loadedMessages.sortedBy { it.timestamp }
+
+                // Сохраняем чат в БД
+                if (lastMessageForChat != null) {
+                    db.chatDao().upsert(
+                        ChatEntity(
+                            partnerName = chatPartner,
+                            lastMessage = lastMessageForChat,
+                            lastMessageTime = lastMessageTime,
+                            unreadCount = newUnreadCount
+                        )
+                    )
+                    println("💾 Чат сохранен: $chatPartner, последнее: $lastMessageForChat, непрочитанных: $newUnreadCount")
+                }
+
                 println("📱 Итого сообщений в чате: ${messages.size}")
 
             } catch (e: Exception) {
@@ -513,8 +602,8 @@ fun ChatScreen(
 
         val textToSend = inputText
         val timestamp = System.currentTimeMillis()
+        val tempId = "temp_$timestamp"
 
-        // Шифруем сообщение
         val encryptedText = try {
             cryptoManager.encrypt(textToSend)
         } catch (e: Exception) {
@@ -522,8 +611,14 @@ fun ChatScreen(
             return
         }
 
-        // Временно добавляем сообщение в список
-        messages = messages + ChatMessage(textToSend, true, timestamp)
+        // Добавляем сообщение с временным ID
+        messages = messages + ChatMessage(
+            messageId = tempId,
+            text = textToSend,
+            isSent = true,
+            timestamp = timestamp
+        )
+        processedMessageIds = processedMessageIds + tempId
         inputText = ""
 
         coroutineScope.launch {
@@ -533,14 +628,13 @@ fun ChatScreen(
                     api.sendMessage(MessageSend(chatPartner, encryptedText, currentUsername))
                 }
 
+                // Обновляем список, чтобы получить реальный ID
+                loadMessages()
                 println("✅ Сообщение отправлено: $textToSend")
 
-                // Обновляем список с сервера
-                loadMessages()
-
             } catch (e: Exception) {
-                // Если ошибка — удаляем сообщение из списка
-                messages = messages.filter { it.timestamp != timestamp }
+                messages = messages.filter { it.messageId != tempId }
+                processedMessageIds = processedMessageIds - tempId
                 Toast.makeText(context, "Ошибка отправки: ${e.message}", Toast.LENGTH_SHORT).show()
                 println("❌ Ошибка отправки: ${e.message}")
             }
@@ -548,9 +642,22 @@ fun ChatScreen(
         }
     }
 
-    // Загружаем сообщения при открытии экрана и каждые 3 секунды
+    // Автообновление
     LaunchedEffect(Unit) {
         loadMessages()
+        // Отмечаем все сообщения от chatPartner как прочитанные
+        coroutineScope.launch {
+            for (msg in messages) {
+                if (!msg.isSent) {
+                    db.readMessageDao().insert(ReadMessageEntity(msg.messageId, chatPartner))
+                }
+            }
+            // Обновляем счетчик в БД чатов
+            val existingChat = db.chatDao().getChat(chatPartner)
+            if (existingChat != null && existingChat.unreadCount > 0) {
+                db.chatDao().upsert(existingChat.copy(unreadCount = 0))
+            }
+        }
         while (true) {
             delay(3000)
             loadMessages()
@@ -583,10 +690,11 @@ fun ChatScreen(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                reverseLayout = false,
+                state = listState,
+                reverseLayout = true,
                 contentPadding = PaddingValues(8.dp)
             ) {
-                items(messages) { message ->
+                items(messages.reversed()) { message ->
                     MessageBubble(
                         text = message.text,
                         isSent = message.isSent
@@ -622,6 +730,12 @@ fun ChatScreen(
             }
         }
     }
+
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(0)
+        }
+    }
 }
 
 @Composable
@@ -651,7 +765,79 @@ fun MessageBubble(text: String, isSent: Boolean) {
     }
 }
 
+@Composable
+fun ChatItem(
+    partnerName: String,
+    lastMessage: String,
+    unreadCount: Int,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Аватар
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = partnerName.take(1).uppercase(),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        // Информация о чате
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = partnerName,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
+            )
+            Text(
+                text = lastMessage,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (unreadCount > 0)
+                    MaterialTheme.colorScheme.onSurface
+                else
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        // Счетчик непрочитанных
+        if (unreadCount > 0) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(24.dp)
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (unreadCount > 99) "99+" else "$unreadCount",
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
 data class ChatMessage(
+    val messageId: String,
     val text: String,
     val isSent: Boolean,
     val timestamp: Long
