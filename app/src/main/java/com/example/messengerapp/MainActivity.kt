@@ -70,8 +70,6 @@ fun MessengerApp() {
     val context = LocalContext.current
     val prefs = context.getSharedPreferences("messenger_prefs", Context.MODE_PRIVATE)
     val savedUsername = prefs.getString("current_user", null)
-
-    // Если пользователь уже входил, идем сразу в main, иначе на экран авторизации
     val startDestination = if (!savedUsername.isNullOrEmpty()) "main/$savedUsername" else "auth"
 
     Surface(
@@ -104,7 +102,6 @@ fun MessengerApp() {
                     navController = navController,
                     onLogout = {
                         println("🔓 Выход из аккаунта: $username")
-                        // Очищаем сохраненного пользователя
                         prefs.edit().remove("current_user").apply()
                         navController.navigate("auth") {
                             popUpTo(0) { inclusive = true }
@@ -560,7 +557,6 @@ fun ChatScreen(
                             lastMessageForChat = decryptedText
                         }
 
-                        // Проверяем, прочитано ли сообщение
                         val isRead = withContext(Dispatchers.IO) {
                             db.readMessageDao().isMessageRead(msg.message_id)
                         }
@@ -574,7 +570,6 @@ fun ChatScreen(
 
                 messages = loadedMessages.sortedBy { it.timestamp }
 
-                // Сохраняем чат в БД
                 if (lastMessageForChat != null) {
                     db.chatDao().upsert(
                         ChatEntity(
@@ -611,7 +606,6 @@ fun ChatScreen(
             return
         }
 
-        // Добавляем сообщение с временным ID
         messages = messages + ChatMessage(
             messageId = tempId,
             text = textToSend,
@@ -628,7 +622,6 @@ fun ChatScreen(
                     api.sendMessage(MessageSend(chatPartner, encryptedText, currentUsername))
                 }
 
-                // Обновляем список, чтобы получить реальный ID
                 loadMessages()
                 println("✅ Сообщение отправлено: $textToSend")
 
@@ -645,14 +638,12 @@ fun ChatScreen(
     // Автообновление
     LaunchedEffect(Unit) {
         loadMessages()
-        // Отмечаем все сообщения от chatPartner как прочитанные
         coroutineScope.launch {
             for (msg in messages) {
                 if (!msg.isSent) {
                     db.readMessageDao().insert(ReadMessageEntity(msg.messageId, chatPartner))
                 }
             }
-            // Обновляем счетчик в БД чатов
             val existingChat = db.chatDao().getChat(chatPartner)
             if (existingChat != null && existingChat.unreadCount > 0) {
                 db.chatDao().upsert(existingChat.copy(unreadCount = 0))
@@ -779,7 +770,6 @@ fun ChatItem(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Аватар
         Box(
             modifier = Modifier
                 .size(48.dp)
@@ -796,7 +786,6 @@ fun ChatItem(
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        // Информация о чате
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = partnerName,
@@ -815,7 +804,6 @@ fun ChatItem(
             )
         }
 
-        // Счетчик непрочитанных
         if (unreadCount > 0) {
             Surface(
                 shape = CircleShape,

@@ -24,7 +24,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "messenger_database.db"
-                ).fallbackToDestructiveMigration()  // ← для простоты, удаляет старую БД
+                ).fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance
                 instance
