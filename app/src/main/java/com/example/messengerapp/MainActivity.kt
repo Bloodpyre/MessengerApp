@@ -45,6 +45,7 @@ import com.example.messengerapp.data.models.MessageSend
 import com.example.messengerapp.data.models.UserRegister
 import com.example.messengerapp.data.models.UserResponse
 import com.example.messengerapp.data.network.RetrofitClient
+import com.example.messengerapp.data.network.WebSocketManager
 import com.example.messengerapp.ui.theme.MessengerAppTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -510,6 +511,41 @@ fun ChatScreen(
     val api = RetrofitClient.instance
     val db = remember { AppDatabase.getInstance(context) }
     val listState = rememberLazyListState()
+    val webSocketManager = WebSocketManager.getInstance()
+    var webSocketConnected by remember { mutableStateOf(false) }
+
+    DisposableEffect(Unit) {
+        webSocketManager.connect(
+            username = currentUsername,
+            onMessage = { sender, encryptedText ->
+                // Получено новое сообщение через WebSocket
+                if (sender == chatPartner) {
+                    val decryptedText = try {
+                        cryptoManager.decrypt(encryptedText)
+                    } catch (e: Exception) {
+                        "[Зашифровано]"
+                    }
+                    val newMessage = ChatMessage(
+                        messageId = System.currentTimeMillis().toString(),
+                        text = decryptedText,
+                        isSent = false,
+                        timestamp = System.currentTimeMillis()
+                    )
+                    messages = (messages + newMessage).sortedBy { it.timestamp }
+                }
+            },
+            onConnect = {
+                webSocketConnected = true
+            },
+            onDisconnect = {
+                webSocketConnected = false
+            }
+        )
+
+        onDispose {
+            webSocketManager.disconnect()
+        }
+    }
 
     // Загрузка сообщений с сервера
     fun loadMessages() {
@@ -533,6 +569,8 @@ fun ChatScreen(
                     if (isInThisChat) {
                         val isSent = msg.sender == currentUsername
                         val timestamp = msg.timestamp.toLongOrNull() ?: System.currentTimeMillis()
+
+                        println("🔍 Сообщение от сервера: id=${msg.message_id}, sender=${msg.sender}")
 
                         val decryptedText = try {
                             cryptoManager.decrypt(msg.encrypted_text)
@@ -594,10 +632,14 @@ fun ChatScreen(
     // Отправка сообщения
     fun sendMessage() {
         if (inputText.isBlank()) return
+        if (!webSocketConnected) {
+            Toast.makeText(context, "Нет подключения к серверу", Toast.LENGTH_SHORT).show()
+            return
+        }
 
         val textToSend = inputText
         val timestamp = System.currentTimeMillis()
-        val tempId = "temp_$timestamp"
+        val tempId = "temp_${System.currentTimeMillis()}"
 
         val encryptedText = try {
             cryptoManager.encrypt(textToSend)
@@ -606,33 +648,17 @@ fun ChatScreen(
             return
         }
 
+        // Добавляем сообщение в список сразу
         messages = messages + ChatMessage(
             messageId = tempId,
             text = textToSend,
             isSent = true,
             timestamp = timestamp
         )
-        processedMessageIds = processedMessageIds + tempId
         inputText = ""
 
-        coroutineScope.launch {
-            isLoading = true
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    api.sendMessage(MessageSend(chatPartner, encryptedText, currentUsername))
-                }
-
-                loadMessages()
-                println("✅ Сообщение отправлено: $textToSend")
-
-            } catch (e: Exception) {
-                messages = messages.filter { it.messageId != tempId }
-                processedMessageIds = processedMessageIds - tempId
-                Toast.makeText(context, "Ошибка отправки: ${e.message}", Toast.LENGTH_SHORT).show()
-                println("❌ Ошибка отправки: ${e.message}")
-            }
-            isLoading = false
-        }
+        // Отправляем через WebSocket
+        webSocketManager.sendMessage(chatPartner, encryptedText)
     }
 
     // Автообновление

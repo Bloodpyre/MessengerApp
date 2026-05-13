@@ -25,4 +25,7 @@ interface ApiService {
 
     @GET("/messages/{username}")
     suspend fun getMessages(@Path("username") username: String): List<MessageResponse>
+
+    @POST("/messages")
+    suspend fun saveMessage(@Body message: MessageSend): Map<String, String>
 }
